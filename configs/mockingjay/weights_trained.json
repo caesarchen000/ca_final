@@ -1,0 +1,30 @@
+{
+  "model_name": "mockingjay_trained",
+  "description": "Pre-trained weights for Mockingjay replacement policy (simulated training on typical benchmarks)",
+  "features": [
+    {
+      "name": "pc_hash",
+      "weight": 0.28,
+      "description": "Hash of program counter, moderate weight to capture locality patterns"
+    },
+    {
+      "name": "age",
+      "weight": 0.42,
+      "description": "Time since insertion, significant weight as age is important for eviction"
+    },
+    {
+      "name": "access_count",
+      "weight": -0.35,
+      "description": "Number of accesses, negative weight strongly protects frequently accessed blocks"
+    },
+    {
+      "name": "reuse_distance",
+      "weight": 0.50,
+      "description": "Distance since last access, highest weight as it's a strong predictor of future reuse"
+    }
+  ],
+  "bias": 0.02,
+  "learning_rate": 0.0005,
+  "enable_online_learning": false,
+  "notes": "These weights are designed to balance multiple factors: reuse_distance (0.50) is the strongest predictor, followed by age (0.42). Access_count has strong negative weight (-0.35) to protect hot data. PC_hash (0.28) captures locality. Suitable for general-purpose workloads with mixed access patterns."
+}

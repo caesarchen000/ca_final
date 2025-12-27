@@ -1,0 +1,30 @@
+{
+  "model_name": "mockingjay_lru_like",
+  "description": "LRU-like configuration for Mockingjay replacement policy",
+  "features": [
+    {
+      "name": "pc_hash",
+      "weight": 0.05,
+      "description": "Hash of program counter, minimal impact for LRU-like behavior"
+    },
+    {
+      "name": "age",
+      "weight": 0.80,
+      "description": "Time since insertion, HIGH weight makes this behave like LRU"
+    },
+    {
+      "name": "access_count",
+      "weight": -0.10,
+      "description": "Number of accesses, small negative weight to slightly favor frequently used"
+    },
+    {
+      "name": "reuse_distance",
+      "weight": 0.15,
+      "description": "Distance since last access, moderate weight"
+    }
+  ],
+  "bias": 0.0,
+  "learning_rate": 0.0001,
+  "enable_online_learning": false,
+  "notes": "High age weight (0.80) makes this policy behave similarly to LRU by prioritizing eviction of oldest entries. Online learning disabled for consistent LRU-like behavior."
+}

@@ -1,0 +1,29 @@
+# Local python artifacts
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+archive/
+docs/archive/
+
+# gem5 outputs
+logs/
+logs_cases/
+logs_batch/
+logs_simple/
+m5out/
+test_iterations/
+
+# Regression logs
+case_*.log
+nohup.out
+output/
+demo_runs/
+scripts/
+
+# tmp
+*.tar.gz
+*.log
+*.swo
+*.swp

@@ -1,0 +1,30 @@
+{
+  "model_name": "mockingjay_random",
+  "description": "Random weight initialization for Mockingjay replacement policy",
+  "features": [
+    {
+      "name": "pc_hash",
+      "weight": 0.15,
+      "description": "Hash of program counter, indicates access pattern"
+    },
+    {
+      "name": "age",
+      "weight": 0.22,
+      "description": "Time since insertion, older blocks may be stale"
+    },
+    {
+      "name": "access_count",
+      "weight": -0.18,
+      "description": "Number of accesses, negative means frequently accessed blocks have lower eviction priority"
+    },
+    {
+      "name": "reuse_distance",
+      "weight": 0.25,
+      "description": "Distance since last access, larger distance suggests lower reuse"
+    }
+  ],
+  "bias": 0.05,
+  "learning_rate": 0.001,
+  "enable_online_learning": true,
+  "notes": "Random initialization allows the model to learn from scratch during online training"
+}

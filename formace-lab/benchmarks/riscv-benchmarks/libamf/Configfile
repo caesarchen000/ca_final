@@ -1,0 +1,31 @@
+LANGUAGES   += c
+COMPILEOPTS += -ansi
+COMPILEOPTS += -Wall
+COMPILEOPTS += -Wextra
+COMPILEOPTS += -pedantic
+COMPILEOPTS += -Werror
+
+LANGUAGES   += h
+
+LANGUAGES   += bash
+
+# This is probably what you want to use: the libamf header file.
+HEADERS     += amf.h
+SOURCES     += amf.h
+
+# A simple command-line program that parses AMF strings, which is also used to
+# test libamf.
+BINARIES    += amf-lookup
+SOURCES     += lookup.c
+
+# The libamf test suite
+TESTSRC     += smiexample-addr.bash
+TESTSRC     += smiexample-size.bash
+
+# A command-line program thar parses AMF strings and uses the libamf API
+# to count the number of tiles, and print that number out.
+BINARIES    += amf-tilecount
+SOURCES     += tilecount.c
+TESTSRC     += single-tile.bash
+TESTSRC     += three-tile.bash
+

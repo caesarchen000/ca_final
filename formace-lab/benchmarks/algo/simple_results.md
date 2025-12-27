@@ -1,0 +1,22 @@
+| Bench | Config | IPC | L2 misses | IPC Δ vs base | L2 miss reduction |
+| --- | --- | ---: | ---: | ---: | ---: |
+| mm | baseline | 0.304 | 2128 | 1.000 | 0.000 |
+| mm | drrip | 0.304 | 2128 | 1.000 | 0.000 |
+| mm | ghb | 0.313 | 655 | 1.028 | 0.692 |
+| mm | tage-lite | 0.304 | 2128 | 1.000 | 0.000 |
+| pointer_chase | baseline | 0.287 | 1666 | 1.000 | 0.000 |
+| pointer_chase | drrip | 0.287 | 1666 | 1.000 | 0.000 |
+| pointer_chase | ghb | 0.307 | 651 | 1.071 | 0.609 |
+| pointer_chase | tage-lite | 0.287 | 1666 | 1.000 | 0.000 |
+| stream | baseline | 0.089 | 2997 | 1.000 | 0.000 |
+| stream | drrip | 0.089 | 2997 | 1.000 | 0.000 |
+| stream | ghb | 0.098 | 769 | 1.098 | 0.743 |
+| stream | tage-lite | 0.089 | 2997 | 1.000 | 0.000 |
+| towers | baseline | 0.317 | 1370 | 1.000 | 0.000 |
+| towers | drrip | 0.317 | 1370 | 1.000 | 0.000 |
+| towers | ghb | 0.322 | 630 | 1.015 | 0.540 |
+| towers | tage-lite | 0.317 | 1370 | 1.000 | 0.000 |
+| vvadd | baseline | 0.106 | 2889 | 1.000 | 0.000 |
+| vvadd | drrip | 0.106 | 2889 | 1.000 | 0.000 |
+| vvadd | ghb | 0.120 | 674 | 1.138 | 0.767 |
+| vvadd | tage-lite | 0.106 | 2889 | 1.000 | 0.000 |

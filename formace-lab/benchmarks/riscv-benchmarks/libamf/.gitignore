@@ -1,0 +1,8 @@
+*.swp
+
+/Configfile.local
+/Makefile
+/bin
+/check
+/include
+/obj

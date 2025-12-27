@@ -161,11 +161,33 @@ GHBHistory::updatePatternTable(const std::vector<int64_t> &chronological)
         return;
     }
 
+    // Update pattern table with all possible delta pairs
+    // This helps learn patterns faster
     for (size_t i = 0; i + 2 < chronological.size(); ++i) {
         DeltaPair key{chronological[i], chronological[i + 1]};
         auto &entry = patternTable[key];
-        entry.counts[chronological[i + 2]]++;
+        int64_t next_delta = chronological[i + 2];
+        entry.counts[next_delta]++;
         entry.total++;
+        
+        // Also learn longer patterns (3-delta, 4-delta sequences) for better prediction
+        // This helps with complex access patterns
+        if (i + 3 < chronological.size()) {
+            // Learn the pattern: (delta[i], delta[i+1]) -> delta[i+2] -> delta[i+3]
+            // This creates a chain of predictions
+            DeltaPair chain_key{chronological[i + 1], chronological[i + 2]};
+            auto &chain_entry = patternTable[chain_key];
+            chain_entry.counts[chronological[i + 3]]++;
+            chain_entry.total++;
+            
+            // Learn 4-delta sequences for even more complex patterns
+            if (i + 4 < chronological.size()) {
+                DeltaPair chain_key2{chronological[i + 2], chronological[i + 3]};
+                auto &chain_entry2 = patternTable[chain_key2];
+                chain_entry2.counts[chronological[i + 4]]++;
+                chain_entry2.total++;
+            }
+        }
     }
 }
 
@@ -194,33 +216,61 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
     // Adaptive confidence: patterns with more occurrences can use lower threshold
     // This allows us to be more aggressive with well-established patterns
     unsigned adaptive_threshold = confidenceThreshold;
-    if (entry.total >= 20) {
-        // Very well-established patterns: reduce threshold by 8%
-        adaptive_threshold = std::max(30u, confidenceThreshold - 8);
+    if (entry.total >= 30) {
+        // Extremely well-established patterns: reduce threshold by 12%
+        adaptive_threshold = std::max(25u, confidenceThreshold - 12);
+    } else if (entry.total >= 20) {
+        // Very well-established patterns: reduce threshold by 10%
+        adaptive_threshold = std::max(28u, confidenceThreshold - 10);
     } else if (entry.total >= 12) {
-        // Well-established patterns: reduce threshold by 5%
-        adaptive_threshold = std::max(35u, confidenceThreshold - 5);
+        // Well-established patterns: reduce threshold by 6%
+        adaptive_threshold = std::max(32u, confidenceThreshold - 6);
     } else if (entry.total >= 6) {
-        // Moderately established: reduce threshold by 3%
-        adaptive_threshold = std::max(40u, confidenceThreshold - 3);
+        // Moderately established: reduce threshold by 4%
+        adaptive_threshold = std::max(38u, confidenceThreshold - 4);
     }
 
     // Build candidates with confidence calculation
+    // Weight by both confidence percentage and absolute count for better prioritization
     std::vector<std::pair<int64_t, unsigned>> candidates;
     for (const auto &count_pair : entry.counts) {
         unsigned confidence = (count_pair.second * 100) / entry.total;
         // Use adaptive threshold
         if (confidence >= adaptive_threshold) {
-            candidates.push_back({count_pair.first, confidence});
+            // Weighted score: combine confidence and absolute count
+            // This helps prioritize patterns with both high confidence and high frequency
+            unsigned weighted_score = confidence;
+            if (count_pair.second >= 5) {
+                // Boost for patterns seen many times
+                weighted_score += 5;
+            } else if (count_pair.second >= 3) {
+                weighted_score += 2;
+            }
+            candidates.push_back({count_pair.first, weighted_score});
         }
     }
 
-    // Sort by confidence (highest first)
+    // Sort by weighted score (highest first)
     std::sort(candidates.begin(), candidates.end(),
               [](const auto &a, const auto &b) { return a.second > b.second; });
 
-    // Return up to 'degree' predictions
-    for (size_t i = 0; i < candidates.size() && predicted.size() < degree; i++) {
+    // Return up to 'degree' predictions, but use adaptive degree for high-confidence patterns
+    // High-confidence patterns can use more aggressive prefetching
+    size_t effective_degree = degree;
+    if (!candidates.empty() && candidates[0].second >= 85 && entry.total >= 15) {
+        // Extremely high confidence with very strong pattern - be very aggressive
+        effective_degree = std::min(static_cast<size_t>(degree) + 3, 
+                                   static_cast<size_t>(degree * 1.8));
+    } else if (!candidates.empty() && candidates[0].second >= 80 && entry.total >= 10) {
+        // Very high confidence with strong pattern - be more aggressive
+        effective_degree = std::min(static_cast<size_t>(degree) + 2, 
+                                   static_cast<size_t>(degree * 1.5));
+    } else if (!candidates.empty() && candidates[0].second >= 70 && entry.total >= 5) {
+        // High confidence - slightly more aggressive
+        effective_degree = static_cast<size_t>(degree) + 1;
+    }
+    
+    for (size_t i = 0; i < candidates.size() && predicted.size() < effective_degree; i++) {
         predicted.push_back(candidates[i].first);
     }
 
@@ -334,24 +384,64 @@ GHBHistory::fallbackPattern(const std::vector<int64_t> &chronological,
         return;
     }
 
-    // Improved fallback: use multiple recent deltas with frequency weighting
-    // Count frequency of recent deltas
+    // Improved fallback: use multiple recent deltas with frequency and recency weighting
+    // Count frequency of recent deltas, with recency bonus
     std::unordered_map<int64_t, uint32_t> delta_freq;
+    std::unordered_map<int64_t, uint32_t> delta_recency; // Track how recent each delta is
     size_t lookback = std::min(chronological.size(), static_cast<size_t>(patternLength));
     for (size_t i = chronological.size(); i > chronological.size() - lookback; i--) {
         int64_t delta = chronological[i - 1];
         if (delta != 0) {
             delta_freq[delta]++;
+            // More recent deltas get higher recency score
+            delta_recency[delta] = std::max(delta_recency[delta], 
+                                           static_cast<uint32_t>(chronological.size() - i + 1));
         }
     }
 
-    // Sort by frequency (most common first)
+    // Sort by weighted score (frequency + recency bonus)
     std::vector<std::pair<int64_t, uint32_t>> freq_sorted(
         delta_freq.begin(), delta_freq.end());
     std::sort(freq_sorted.begin(), freq_sorted.end(),
-              [](const auto &a, const auto &b) { return a.second > b.second; });
+              [&delta_recency](const auto &a, const auto &b) {
+                  // Weight: frequency * 2 + recency (prioritize frequent and recent)
+                  uint32_t recency_a = delta_recency.count(a.first) ? delta_recency.at(a.first) : 0;
+                  uint32_t recency_b = delta_recency.count(b.first) ? delta_recency.at(b.first) : 0;
+                  uint32_t score_a = a.second * 2 + recency_a;
+                  uint32_t score_b = b.second * 2 + recency_b;
+                  if (score_a != score_b) {
+                      return score_a > score_b;
+                  }
+                  // Tie-breaker: prefer positive strides (forward access)
+                  if (a.first > 0 && b.first <= 0) return true;
+                  if (a.first <= 0 && b.first > 0) return false;
+                  return std::abs(a.first) < std::abs(b.first);
+              });
 
-    // Use most frequent deltas, up to degree
+    // Check if the most frequent delta forms a stride pattern
+    // If so, amplify it aggressively
+    if (!freq_sorted.empty() && freq_sorted[0].second >= 2) {
+        int64_t candidate_stride = freq_sorted[0].first;
+        // Check if this delta appears consecutively in recent history
+        size_t consecutive_count = 0;
+        for (size_t i = chronological.size(); i > 0 && i > chronological.size() - 5; i--) {
+            if (chronological[i - 1] == candidate_stride) {
+                consecutive_count++;
+            } else {
+                break;
+            }
+        }
+        
+        if (consecutive_count >= 2 && std::abs(candidate_stride) < 200) {
+            // Found a stride pattern - amplify it
+            for (size_t i = 0; i < degree; i++) {
+                predicted.push_back(candidate_stride * static_cast<int64_t>(i + 1));
+            }
+            return; // Early return since we found a good stride
+        }
+    }
+    
+    // Use most frequent/recent deltas, up to degree
     for (size_t i = 0; i < freq_sorted.size() && predicted.size() < degree; i++) {
         predicted.push_back(freq_sorted[i].first);
     }

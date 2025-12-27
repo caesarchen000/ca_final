@@ -1,1 +1,7 @@
 gem5/
+
+# Build artifacts
+build/
+*.fast
+*.opt
+*.debug

@@ -48,22 +48,40 @@ GHBPrefetcher::calculatePrefetch(
         return;
     }
 
-    // Try PC-based pattern first (more specific)
+    // NEW METHOD 1: Pattern Fusion - Try both PC and Page patterns and combine intelligently
     std::vector<int64_t> pc_deltas;
     pc_deltas.reserve(patternLength);
     bool hasPCPattern =
         historyHelper.buildPattern(idx, GHBHistory::CorrelationKey::PC, pc_deltas);
     
-    // Try Page-based pattern as fallback or supplement
     std::vector<int64_t> page_deltas;
     page_deltas.reserve(patternLength);
     bool hasPagePattern =
         historyHelper.buildPattern(idx, GHBHistory::CorrelationKey::Page, page_deltas);
 
-    // Prefer PC pattern if available (more specific), otherwise use Page pattern
+    // Pattern Fusion: Combine PC and Page patterns for better coverage
+    // Use PC pattern as primary (more specific), but supplement with Page pattern if available
     std::vector<int64_t> deltas;
     bool hasPattern = false;
-    if (hasPCPattern) {
+    
+    if (hasPCPattern && hasPagePattern) {
+        // Both patterns available - use PC as primary, supplement with Page
+        deltas = pc_deltas;
+        // Add unique deltas from Page pattern that aren't in PC pattern
+        for (int64_t page_delta : page_deltas) {
+            bool found = false;
+            for (int64_t pc_delta : pc_deltas) {
+                if (page_delta == pc_delta) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && page_delta != 0) {
+                deltas.push_back(page_delta);
+            }
+        }
+        hasPattern = true;
+    } else if (hasPCPattern) {
         deltas = pc_deltas;
         hasPattern = true;
     } else if (hasPagePattern) {
@@ -75,8 +93,21 @@ GHBPrefetcher::calculatePrefetch(
         return;
     }
 
+    // Update pattern table with both PC and Page patterns for better learning
     std::vector<int64_t> chronological(deltas.rbegin(), deltas.rend());
     historyHelper.updatePatternTable(chronological);
+    
+    // Also update with PC pattern separately if available (for PC-specific learning)
+    if (hasPCPattern && pc_deltas.size() > 0) {
+        std::vector<int64_t> pc_chronological(pc_deltas.rbegin(), pc_deltas.rend());
+        historyHelper.updatePatternTable(pc_chronological);
+    }
+    
+    // Also update with Page pattern separately if available (for Page-specific learning)
+    if (hasPagePattern && page_deltas.size() > 0) {
+        std::vector<int64_t> page_chronological(page_deltas.rbegin(), page_deltas.rend());
+        historyHelper.updatePatternTable(page_chronological);
+    }
 
     // Enhanced stride detection: look for consistent stride patterns
     // This catches simple sequential patterns early and aggressively
@@ -106,19 +137,25 @@ GHBPrefetcher::calculatePrefetch(
             int64_t stride = last_delta;
             // Use degree, but be extremely aggressive for longer stride sequences
             // High-confidence strides can prefetch much further ahead - target 30% improvement
-            size_t prefetch_count = degree;
-            if (stride_count >= 8) {
-                // Extremely strong pattern - prefetch 2.5x degree ahead
-                prefetch_count = std::min(static_cast<size_t>(degree) * 2 + 1, stride_count);
+            size_t prefetch_count = static_cast<size_t>(degree) + 2; // Baseline boost
+            if (stride_count >= 10) {
+                // Ultra-strong pattern - prefetch 4x degree ahead
+                prefetch_count = std::min(static_cast<size_t>(degree) * 4, stride_count * 2);
+            } else if (stride_count >= 8) {
+                // Extremely strong pattern - prefetch 3.5x degree ahead
+                prefetch_count = std::min(static_cast<size_t>(degree) * 3 + 1, stride_count * 2);
             } else if (stride_count >= 6) {
-                // Very strong pattern - prefetch 2x degree ahead
-                prefetch_count = std::min(static_cast<size_t>(degree) * 2, stride_count);
+                // Very strong pattern - prefetch 3x degree ahead
+                prefetch_count = std::min(static_cast<size_t>(degree) * 3, stride_count * 2);
             } else if (stride_count >= 4) {
-                // Strong pattern - prefetch 1.5x degree ahead
-                prefetch_count = std::min(static_cast<size_t>(degree) + 2, stride_count);
+                // Strong pattern - prefetch 2.5x degree ahead
+                prefetch_count = std::min(static_cast<size_t>(degree) * 2 + 1, stride_count * 2);
             } else if (stride_count >= 3) {
-                // Moderate pattern - slightly more aggressive
-                prefetch_count = std::min(static_cast<size_t>(degree) + 1, stride_count);
+                // Moderate pattern - prefetch 2x degree ahead
+                prefetch_count = std::min(static_cast<size_t>(degree) * 2, stride_count * 2);
+            } else if (stride_count >= 2) {
+                // Even weak patterns get boost
+                prefetch_count = std::min(static_cast<size_t>(degree) + 3, stride_count * 2);
             }
             for (size_t i = 0; i < prefetch_count; i++) {
                 predicted.push_back(stride * static_cast<int64_t>(i + 1));
@@ -133,7 +170,9 @@ GHBPrefetcher::calculatePrefetch(
             if (last_delta == prev_prev_delta && prev_delta == prev_prev_prev_delta &&
                 last_delta != 0 && std::abs(last_delta) < 200) {
                 int64_t stride = last_delta;
-                for (size_t i = 0; i < degree && i < 3; i++) {
+                // Be more aggressive with alternating patterns
+                size_t alt_prefetch = std::min(static_cast<size_t>(degree) * 2, static_cast<size_t>(8));
+                for (size_t i = 0; i < alt_prefetch; i++) {
                     predicted.push_back(stride * static_cast<int64_t>(i + 1));
                 }
                 foundMatch = true;
@@ -266,13 +305,13 @@ GHBPrefetcher::calculatePrefetch(
         }
     }
     
-    // Also check if chronological history shows sequential pattern
+    // NEW METHOD 3: Improved Sequential Detection with better heuristics
     if (!is_sequential && chronological.size() >= 3) {
         int64_t last_delta = chronological.back();
         if (last_delta != 0 && std::abs(last_delta) < 300) {
             // Check if last few deltas are the same (strong sequential indicator)
             size_t same_count = 1;
-            for (int i = static_cast<int>(chronological.size()) - 2; i >= 0 && i >= static_cast<int>(chronological.size()) - 5; i--) {
+            for (int i = static_cast<int>(chronological.size()) - 2; i >= 0 && i >= static_cast<int>(chronological.size()) - 8; i--) {
                 if (chronological[i] == last_delta) {
                     same_count++;
                 } else {
@@ -283,6 +322,25 @@ GHBPrefetcher::calculatePrefetch(
                 is_sequential = true;
                 if (base_stride == 0 || std::abs(base_stride - last_delta) > 2) {
                     base_stride = last_delta;
+                }
+            }
+            
+            // Also check for near-sequential patterns (deltas that are very close)
+            // This catches patterns with slight variations
+            if (!is_sequential && same_count == 1) {
+                size_t near_same_count = 1;
+                for (int i = static_cast<int>(chronological.size()) - 2; i >= 0 && i >= static_cast<int>(chronological.size()) - 6; i--) {
+                    if (std::abs(chronological[i] - last_delta) <= 2 && std::abs(last_delta) < 100) {
+                        near_same_count++;
+                    } else {
+                        break;
+                    }
+                }
+                if (near_same_count >= 3) {
+                    is_sequential = true;
+                    if (base_stride == 0) {
+                        base_stride = last_delta;
+                    }
                 }
             }
         }
@@ -318,22 +376,25 @@ GHBPrefetcher::calculatePrefetch(
                 static_cast<int64_t>(block_addr) + delta);
         }
 
-        // Check page boundary - but allow cross-page prefetching intelligently
+        // Check page boundary - but allow cross-page prefetching more intelligently
         if (!samePage(block_addr, next_addr)) {
-            // Allow cross-page prefetches if:
-            // 1. Small stride (likely same data structure)
-            // 2. Sequential pattern (high confidence)
-            // 3. Negative stride (backward access, allow for small strides)
+            // Allow cross-page prefetches more intelligently:
+            // 1. Sequential patterns (high confidence) - allow larger strides
+            // 2. Small/medium strides (likely same data structure)
+            // 3. Negative stride (backward access)
             bool allow_cross_page = false;
             
-            if (is_sequential && std::abs(base_stride) < 64) {
+            if (is_sequential && std::abs(base_stride) < 128) {
                 // Sequential pattern with small stride - likely same structure
                 allow_cross_page = true;
-            } else if (std::abs(delta) < 32) {
-                // Very small delta - likely same structure
+            } else if (std::abs(delta) < 64) {
+                // Small delta - likely same structure
                 allow_cross_page = true;
-            } else if (delta < 0 && std::abs(delta) < 128) {
-                // Small backward stride - allow for stack-like access
+            } else if (delta < 0 && std::abs(delta) < 256) {
+                // Backward stride - allow for stack-like access
+                allow_cross_page = true;
+            } else if (std::abs(delta) < 128 && predicted.size() <= 5) {
+                // Medium stride with moderate predictions - might be valid
                 allow_cross_page = true;
             }
             

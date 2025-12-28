@@ -161,14 +161,36 @@ GHBHistory::updatePatternTable(const std::vector<int64_t> &chronological)
         return;
     }
 
+    // NEW METHOD 2: Recency-weighted learning - give more weight to recent patterns
+    // Recent patterns are more likely to be relevant
+    size_t total_size = chronological.size();
+    
     // Update pattern table with all possible delta pairs
     // This helps learn patterns faster
     for (size_t i = 0; i + 2 < chronological.size(); ++i) {
         DeltaPair key{chronological[i], chronological[i + 1]};
         auto &entry = patternTable[key];
         int64_t next_delta = chronological[i + 2];
-        entry.counts[next_delta]++;
-        entry.total++;
+        
+        // Recency weighting: more recent patterns get higher weight
+        // Patterns at the end of the sequence (more recent) get higher weight
+        size_t recency_weight = 1;
+        if (i + 2 >= total_size - 2) {
+            // Very recent (last 2 deltas) - 3x weight
+            recency_weight = 3;
+        } else if (i + 2 >= total_size - 4) {
+            // Recent (last 4 deltas) - 2x weight
+            recency_weight = 2;
+        } else if (i + 2 >= total_size - 6) {
+            // Moderately recent (last 6 deltas) - 1.5x weight
+            recency_weight = 1;
+        }
+        
+        // Apply recency weight by incrementing multiple times
+        for (size_t w = 0; w < recency_weight; w++) {
+            entry.counts[next_delta]++;
+            entry.total++;
+        }
         
         // Also learn longer patterns (3-delta, 4-delta sequences) for better prediction
         // This helps with complex access patterns
@@ -278,21 +300,21 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
         // Be extremely aggressive to catch more patterns - target 30% improvement
         unsigned adaptive_threshold = confidenceThreshold;
         if (entry.total >= 50) {
-            adaptive_threshold = std::max(12u, confidenceThreshold - 30);
+            adaptive_threshold = std::max(10u, confidenceThreshold - 35);
         } else if (entry.total >= 40) {
-            adaptive_threshold = std::max(15u, confidenceThreshold - 25);
+            adaptive_threshold = std::max(12u, confidenceThreshold - 30);
         } else if (entry.total >= 30) {
-            adaptive_threshold = std::max(18u, confidenceThreshold - 22);
+            adaptive_threshold = std::max(15u, confidenceThreshold - 25);
         } else if (entry.total >= 20) {
-            adaptive_threshold = std::max(20u, confidenceThreshold - 18);
+            adaptive_threshold = std::max(18u, confidenceThreshold - 20);
         } else if (entry.total >= 12) {
-            adaptive_threshold = std::max(22u, confidenceThreshold - 15);
+            adaptive_threshold = std::max(20u, confidenceThreshold - 18);
         } else if (entry.total >= 6) {
-            adaptive_threshold = std::max(25u, confidenceThreshold - 10);
+            adaptive_threshold = std::max(22u, confidenceThreshold - 12);
         } else if (entry.total >= 3) {
-            adaptive_threshold = std::max(30u, confidenceThreshold - 8);
+            adaptive_threshold = std::max(25u, confidenceThreshold - 10);
         } else if (entry.total >= 2) {
-            adaptive_threshold = std::max(35u, confidenceThreshold - 5);
+            adaptive_threshold = std::max(30u, confidenceThreshold - 8);
         }
         
         // Track best threshold and entry for later use
@@ -319,7 +341,7 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
 
         // Build candidates with confidence calculation and recency weighting
         // Primary patterns (most recent) get much higher weight
-        unsigned pattern_weight = (key_idx == 0) ? 5 : 1; // Increased primary weight
+        unsigned pattern_weight = (key_idx == 0) ? 5 : 1; // Primary weight
         
         for (const auto &count_pair : entry.counts) {
             unsigned confidence = (count_pair.second * 100) / entry.total;
@@ -364,32 +386,35 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
     // Determine effective degree based on best entry (primary pattern)
     // Be extremely aggressive for high-confidence patterns - target 30% improvement
     // Start with a higher baseline to be more aggressive overall
-    size_t effective_degree = static_cast<size_t>(degree) + 2; // Higher baseline boost
+    size_t effective_degree = static_cast<size_t>(degree) + 4; // Higher baseline boost
     if (best_entry) {
         if (best_confidence >= 90 && best_entry->total >= 20) {
-            // Extremely high confidence - prefetch 10x degree
+            // Extremely high confidence - prefetch 12x degree
+            effective_degree = std::min(static_cast<size_t>(degree) * 12, 
+                                       static_cast<size_t>(degree * 12));
+        } else if (best_confidence >= 85 && best_entry->total >= 15) {
             effective_degree = std::min(static_cast<size_t>(degree) * 10, 
                                        static_cast<size_t>(degree * 10));
-        } else if (best_confidence >= 85 && best_entry->total >= 15) {
+        } else if (best_confidence >= 80 && best_entry->total >= 10) {
             effective_degree = std::min(static_cast<size_t>(degree) * 8, 
                                        static_cast<size_t>(degree * 8));
-        } else if (best_confidence >= 80 && best_entry->total >= 10) {
+        } else if (best_confidence >= 70 && best_entry->total >= 5) {
             effective_degree = std::min(static_cast<size_t>(degree) * 6, 
                                        static_cast<size_t>(degree * 6));
-        } else if (best_confidence >= 70 && best_entry->total >= 5) {
+        } else if (best_confidence >= 60 && best_entry->total >= 3) {
             effective_degree = std::min(static_cast<size_t>(degree) * 4, 
                                        static_cast<size_t>(degree * 4));
-        } else if (best_confidence >= 60 && best_entry->total >= 3) {
-            effective_degree = std::min(static_cast<size_t>(degree) * 2, 
-                                       static_cast<size_t>(degree * 2));
         } else if (best_confidence >= 50 && best_entry->total >= 2) {
+            effective_degree = std::min(static_cast<size_t>(degree) * 3, 
+                                       static_cast<size_t>(degree * 3));
+        } else if (best_confidence >= 40) {
             effective_degree = std::min(static_cast<size_t>(degree) * 2, 
                                        static_cast<size_t>(degree * 2));
-        } else if (best_confidence >= 40) {
-            effective_degree = std::min(static_cast<size_t>(degree) + 4, 
-                                       static_cast<size_t>(degree * 1.8));
         } else if (best_confidence >= 30) {
-            effective_degree = std::min(static_cast<size_t>(degree) + 2, 
+            effective_degree = std::min(static_cast<size_t>(degree) + 6, 
+                                       static_cast<size_t>(degree * 2));
+        } else if (best_confidence >= 20) {
+            effective_degree = std::min(static_cast<size_t>(degree) + 4, 
                                        static_cast<size_t>(degree * 1.5));
         }
         // Even if confidence is lower, we already have baseline boost
@@ -407,8 +432,8 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
         auto it = patternTable.find(pattern_keys[0]);
         if (it != patternTable.end()) {
             const PatternEntry &entry = it->second;
-            // Use a lower threshold to get more candidates
-            unsigned lenient_threshold = std::max(25u, best_adaptive_threshold - 10);
+            // Use a lower threshold to get more candidates - be more aggressive
+            unsigned lenient_threshold = std::max(20u, best_adaptive_threshold - 12);
             for (const auto &count_pair : entry.counts) {
                 if (predicted.size() >= effective_degree) break;
                 unsigned confidence = (count_pair.second * 100) / entry.total;
@@ -462,7 +487,7 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
     // Enhanced prediction chaining: extend predictions to fill degree
     // Chain multiple predictions for better coverage and prefetch distance
     // Be extremely aggressive with chaining to maximize prefetch distance
-    size_t max_chain_attempts = effective_degree * 3; // Allow even more chaining attempts
+    size_t max_chain_attempts = effective_degree * 3; // Allow more chaining attempts
     if (!predicted.empty() && predicted.size() < effective_degree && chronological.size() >= 2) {
         int64_t last_delta = chronological.back();
         
@@ -484,8 +509,8 @@ GHBHistory::findPatternMatch(const std::vector<int64_t> &chronological,
                 if (chain_entry.total >= min_total) {
                     // Use much lower threshold for chained predictions to get more coverage
                     unsigned chain_threshold = chain_attempt == 0 ? 
-                                             std::max(best_adaptive_threshold, 25u) : 
-                                             std::max(best_adaptive_threshold - 10u, 20u);
+                                             std::max(best_adaptive_threshold, 20u) : 
+                                             std::max(best_adaptive_threshold - 15u, 15u);
                     
                     // Find best candidates from chained pattern
                     std::vector<std::pair<int64_t, unsigned>> chain_candidates;
@@ -667,22 +692,22 @@ GHBHistory::fallbackPattern(const std::vector<int64_t> &chronological,
         
         if (consecutive_count >= 1 && std::abs(candidate_stride) < 300) {
             // Found a stride pattern - amplify it extremely aggressively
-            size_t prefetch_count = static_cast<size_t>(degree) + 2; // Baseline boost
+            size_t prefetch_count = static_cast<size_t>(degree) + 5; // Higher baseline boost
             if (consecutive_count >= 8) {
+                prefetch_count = std::min(static_cast<size_t>(degree) * 8, 
+                                         static_cast<size_t>(degree * 8));
+            } else if (consecutive_count >= 6) {
                 prefetch_count = std::min(static_cast<size_t>(degree) * 6, 
                                          static_cast<size_t>(degree * 6));
-            } else if (consecutive_count >= 6) {
-                prefetch_count = std::min(static_cast<size_t>(degree) * 5, 
-                                         static_cast<size_t>(degree * 5));
             } else if (consecutive_count >= 4) {
                 prefetch_count = std::min(static_cast<size_t>(degree) * 4, 
                                          static_cast<size_t>(degree * 4));
             } else if (consecutive_count >= 2) {
+                prefetch_count = std::min(static_cast<size_t>(degree) * 3, 
+                                         static_cast<size_t>(degree * 3));
+            } else {
                 prefetch_count = std::min(static_cast<size_t>(degree) * 2, 
                                          static_cast<size_t>(degree * 2));
-            } else {
-                prefetch_count = std::min(static_cast<size_t>(degree) + 2, 
-                                         static_cast<size_t>(degree * 1.5));
             }
             for (size_t i = 0; i < prefetch_count; i++) {
                 predicted.push_back(candidate_stride * static_cast<int64_t>(i + 1));
